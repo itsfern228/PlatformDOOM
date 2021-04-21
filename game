@@ -1,0 +1,388 @@
+import pygame
+from pygame.locals import *
+import pickle
+from os import path
+
+pygame.init()
+
+# frame rate
+clock = pygame.time.Clock()
+fps = 60
+# screen settings
+screen_width = 700
+screen_height = 700
+screen = pygame.display.set_mode((screen_width, screen_height))
+
+# game title name and icon
+pygame.display.set_caption("Platform DOOM")
+icon = pygame.image.load('images/icon_doom.png')
+pygame.display.set_icon(icon)
+
+# load images
+bg1_img = pygame.image.load('images/bg1.jpg')
+restart_image = pygame.image.load('images/restart.png')
+start_img = pygame.image.load('images/start.png')
+exit_img = pygame.image.load('images/exit.png')
+
+# block size variable
+tile_size = 35
+# game over variable
+game_over = 0
+# main menu variable
+main_menu = True
+# game level variable
+level = 1
+max_level = 4
+
+
+# function to reset level
+def reset_level(level):
+    player.reset(60, screen_height - 130)
+    spike_group.empty()
+    lava_group.empty()
+    enemy_group.empty()
+    exit_group.empty()
+
+    # load in level data and create world
+    if path.exists(f'level{level}'):
+        pickle_in = open(f'level{level}', 'rb')
+        world_data = pickle.load(pickle_in)
+    world = World(world_data)
+
+    return world
+
+
+class Button:
+    def __init__(self, x, y, image):
+        self.image = image
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+
+    def draw(self):
+        action = False
+        # get mouse position
+        pos = pygame.mouse.get_pos()
+
+        # check mouseover and clicked condition
+        if self.rect.collidepoint(pos):
+            if pygame.mouse.get_pressed()[0] == 1 and self.clicked == False:
+                action = True
+                self.clicked = True
+
+        if pygame.mouse.get_pressed()[0] == 0:
+            self.clicked = False
+
+        # draw button
+        screen.blit(self.image, self.rect)
+
+        return action
+
+
+def draw_grid():
+    for line in range(0, 20):
+        pygame.draw.line(screen, (255, 255, 255), (0, line * tile_size), (screen_width, line * tile_size))
+        pygame.draw.line(screen, (255, 255, 255), (line * tile_size, 0), (line * tile_size, screen_height))
+
+
+# create player
+class Player:
+    def __init__(self, x, y):
+        img = pygame.image.load('images/player.png')
+        self.image = pygame.transform.scale(img, (40, 80))
+        self.dead_image = pygame.image.load('images/dead.png')
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+        self.width = self.image.get_width()
+        self.height = self.image.get_height()
+        self.vel_y = 0
+        self.jumped = False
+        self.direction = 0
+
+    def update(self, game_over):
+
+        dx = 0
+        dy = 0
+        if game_over == 0:
+            # get key presses
+            key = pygame.key.get_pressed()
+            if key[pygame.K_SPACE] and self.jumped == False and self.in_air == False:
+                self.vel_y = -16
+                self.jumped = True
+            if not key[pygame.K_SPACE]:
+                self.jumped = False
+
+            if key[pygame.K_LEFT]:
+                dx -= 5
+                self.direction = -1
+            if key[pygame.K_RIGHT]:
+                dx += 5
+                self.direction = 1
+
+            # add gravity
+            self.vel_y += 1
+            if self.vel_y > 10:
+                self.vel_y = 10
+            dy += self.vel_y
+
+            # check for collision
+            self.in_air = True
+            for tile in world.tile_list:
+                # check for collision in x direction
+                if tile[1].colliderect(self.rect.x + dx, self.rect.y, self.width, self.height):
+                    dx = 0
+                # check for collision in y direction
+                if tile[1].colliderect(self.rect.x, self.rect.y + dy, self.width, self.height):
+                    # check if below the ground i.e. jumping
+                    if self.vel_y < 0:
+                        dy = tile[1].bottom - self.rect.top
+                        self.vel_y = 0
+                    # check is above the ground i.e. falling
+                    elif self.vel_y >= 0:
+                        dy = tile[1].top - self.rect.bottom
+                        self.vel_y = 0
+                        self.in_air = False
+
+            # check for collision with spike
+            if pygame.sprite.spritecollide(self, spike_group, False):
+                game_over = -1
+            # check for collision with lava
+            if pygame.sprite.spritecollide(self, lava_group, False):
+                game_over = -1
+            # check for collision with enemy
+            if pygame.sprite.spritecollide(self, enemy_group, False):
+                game_over = -1
+            # check for collision with exit portal
+            if pygame.sprite.spritecollide(self, exit_group, False):
+                game_over = 1
+
+            # update player coordinates
+            self.rect.x += dx
+            self.rect.y += dy
+        elif game_over == -1:
+            self.image = self.dead_image
+            if self.rect.y > 100:
+                self.rect.y -= 5
+
+        # draw player on the screen
+        screen.blit(self.image, self.rect)
+        pygame.draw.rect(screen, (255, 255, 255), self.rect, 2)
+
+        return game_over
+
+    def reset(self, x, y):
+        img = pygame.image.load('images/player.png')
+        self.image = pygame.transform.scale(img, (40, 80))
+        self.dead_image = pygame.image.load('images/dead.png')
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+        self.width = self.image.get_width()
+        self.height = self.image.get_height()
+        self.vel_y = 0
+        self.jumped = False
+        self.direction = 0
+        self.in_air = True
+
+
+# class world to create the world and blocks
+class World:
+    def __init__(self, data):
+        self.tile_list = []
+
+        # load images
+        brick_img = pygame.image.load('images/brickwall.png')
+
+        row_count = 0
+        for row in data:
+            col_count = 0
+            for tile in row:
+                if tile == 1:
+                    img = pygame.transform.scale(brick_img, (tile_size, tile_size))
+                    img_rect = img.get_rect()
+                    img_rect.x = col_count * tile_size
+                    img_rect.y = row_count * tile_size
+                    tile = (img, img_rect)
+                    self.tile_list.append(tile)
+                if tile == 2:
+                    spike = Spike(col_count * tile_size, row_count * tile_size + 2)
+                    spike_group.add(spike)
+                if tile == 3:
+                    lava = Lava(col_count * tile_size, row_count * tile_size + (tile_size // 2))
+                    lava_group.add(lava)
+                if tile == 4:
+                    enemy = Enemy(col_count * tile_size, row_count * tile_size - 32)
+                    enemy_group.add(enemy)
+                if tile == 8:
+                    exit_portal = Exit(col_count * tile_size, row_count * tile_size - 32)
+                    exit_group.add(exit_portal)
+                if tile == 9:
+                    win = Win(col_count * tile_size, row_count * tile_size)
+                    win_group.add(win)
+
+                col_count += 1
+            row_count += 1
+
+    # draws blocks
+    def draw(self):
+        for tile in self.tile_list:
+            screen.blit(tile[0], tile[1])
+            pygame.draw.rect(screen, (255, 255, 255), tile[1], 2)
+
+
+# create spike
+class Spike(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        pygame.sprite.Sprite.__init__(self)
+        self.image = pygame.image.load('images/spike1.png')
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+        self.move_direction = 1
+        self.move_counter = 0
+
+    def update(self):
+        self.rect.x += self.move_direction
+        self.move_counter += 1
+        if abs(self.move_counter) > 40:
+            self.move_direction *= -1
+            self.move_counter *= -1
+
+
+# create lava
+class Lava(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        pygame.sprite.Sprite.__init__(self)
+        img = pygame.image.load('images/lava.png')
+        self.image = pygame.transform.scale(img, (tile_size, tile_size // 2))
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+
+
+# create enemy
+class Enemy(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        pygame.sprite.Sprite.__init__(self)
+        img = pygame.image.load('images/enemy1.png')
+        self.image = pygame.transform.scale(img, (tile_size * 2, tile_size * 2))
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+        self.move_direction = 1
+        self.move_counter = 0
+
+    def update(self):
+        self.rect.x += self.move_direction
+        self.move_counter += 1
+        if abs(self.move_counter) > 50:
+            self.move_direction *= -1
+            self.move_counter *= -1
+
+
+# create winner
+class Win(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        pygame.sprite.Sprite.__init__(self)
+        img = pygame.image.load('images/winner.png')
+        self.image = pygame.transform.scale(img, (tile_size * 5, tile_size * 5))
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+
+
+# create exit portal
+class Exit(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        pygame.sprite.Sprite.__init__(self)
+        img = pygame.image.load('images/portal.png')
+        self.image = pygame.transform.scale(img, (int(tile_size * 1.5), int(tile_size * 2)))
+        self.rect = self.image.get_rect()
+        self.rect.x = x
+        self.rect.y = y
+
+
+# variable to class and groups
+player = Player(60, screen_height - 130)
+spike_group = pygame.sprite.Group()
+lava_group = pygame.sprite.Group()
+enemy_group = pygame.sprite.Group()
+win_group = pygame.sprite.Group()
+exit_group = pygame.sprite.Group()
+
+# load in level data and create world
+if path.exists(f'level{level}'):
+    pickle_in = open(f'level{level}', 'rb')
+    world_data = pickle.load(pickle_in)
+world = World(world_data)
+
+# create button
+restart_button = Button(screen_width // 2 - 50, screen_height // 2 - 40, restart_image)
+start_button = Button(screen_width // 2 - 80, screen_height // 2, start_img)
+exit_button = Button(screen_width // 2 + 80, screen_height // 2, exit_img)
+
+# loop to keep game running
+run = True
+while run:
+
+    # fps
+    clock.tick(fps)
+
+    # display image on screen
+    screen.blit(bg1_img, (0, 0))
+
+    if main_menu:
+        if exit_button.draw():
+            run = False
+        if start_button.draw():
+            main_menu = False
+
+    else:
+        world.draw()
+        if game_over == 0:
+            spike_group.update()
+            enemy_group.update()
+        spike_group.draw(screen)
+        lava_group.draw(screen)
+        enemy_group.draw(screen)
+        win_group.draw(screen)
+        exit_group.draw(screen)
+        game_over = player.update(game_over)
+
+        # if player has died
+        if game_over == -1:
+            if restart_button.draw():
+                world_data = []
+                world = reset_level(level)
+                game_over = 0
+
+        # if player has completed level
+        if game_over == 1:
+            # reset game and go to next level
+            level += 1
+            if level <= max_level:
+                # reset level
+                world_data = []
+                world = reset_level(level)
+                game_over = 0
+            else:
+                # restart game
+                if restart_button.draw():
+                    level = 1
+                    # reset level
+                    world_data = []
+                    world = reset_level(level)
+                    game_over = 0
+
+    # cycles through events to terminate game
+    for event in pygame.event.get():
+
+        # ends game when X button is clicked
+        if event.type == pygame.QUIT:
+            run = False
+
+    # update display window
+    pygame.display.update()
+
+pygame.quit()
